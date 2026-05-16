@@ -26,15 +26,44 @@ const ARTIFACT_POOL = [
 
 const state = {
   screen:"title", playerHP:30, enemyHP:20, gold:10, battle:1,
-  deck:[], artifacts:[], selected:new Set(), shop:[], usedRevive:false, turnPowerReward:0,
+  deck:[], artifacts:[], selected:new Set(), shop:[], usedRevive:false, turnPowerReward:0, titleMessage:"", hand:[],
 };
 
 const el = id=>document.getElementById(id);
 const screens = ["titleScreen","battleScreen","upgradeScreen"];
-const showScreen = id => screens.forEach(s=>el(s).classList.toggle("active", s===id));
+const showScreen = id => {
+  screens.forEach(s=>el(s).classList.toggle("active", s===id));
+  el("startBtn").style.display = id === "titleScreen" ? "inline-block" : "none";
+  el("titleMessage").textContent = id === "titleScreen" ? (state.titleMessage || "") : "";
+};
 
 function createBaseDeck(){ const d=[]; for(const s of SUITS)for(const r of RANKS)d.push({id:crypto.randomUUID(),suit:s,rank:String(r),effect:null}); return d; }
-function drawCards(n){ const c=[]; for(let i=0;i<n;i++) c.push(state.deck[Math.floor(Math.random()*state.deck.length)]); return c.map(x=>({...x})); }
+function drawCards(n){
+  const take = Math.min(n, state.deck.length);
+  return state.deck.splice(0, take).map(x=>({...x}));
+}
+
+function peekRandomCards(n){
+  const pool = [...state.deck];
+  for(let i=pool.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [pool[i],pool[j]] = [pool[j],pool[i]];
+  }
+  return pool.slice(0, Math.min(n, pool.length)).map(x=>({...x}));
+}
+
+
+function shuffleDeck(){
+  for(let i=state.deck.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [state.deck[i],state.deck[j]] = [state.deck[j],state.deck[i]];
+  }
+}
+
+function refillHandToMax(){
+  const need = Math.max(0, HAND_SIZE - state.hand.length);
+  if(need>0) state.hand.push(...drawCards(need));
+}
 
 function countBy(arr,key){ return arr.reduce((a,c)=>(a[c[key]]=(a[c[key]]||0)+1,a),{}); }
 function isStraight(vals){ const s=[...new Set(vals)].sort((a,b)=>a-b); if(s.length!==5)return false; return s[4]-s[0]===4 || JSON.stringify(s)==='[2,3,4,5,14]'; }
@@ -90,7 +119,7 @@ function renderHand(){
 function startBattle(){
   state.enemyHP = 16 + state.battle*6;
   state.turnPowerReward = 0;
-  state.hand = drawCards(HAND_SIZE);
+  if(state.hand.length===0) refillHandToMax();
   state.selected.clear();
   renderHud(); renderHand();
   el("enemyPlayed").innerHTML="";el("playerPlayed").innerHTML="";el("enemyInfo").textContent="";el("playerInfo").textContent="";
@@ -114,9 +143,9 @@ function enemyChoose(hand){
 
 function executeTurn(){
   if(state.selected.size!==5) return alert("5枚選択してください");
-  const idx=[...state.selected];
+  const idx=[...state.selected].sort((a,b)=>b-a);
   const pick=idx.map(i=>state.hand[i]);
-  const enemyHand=drawCards(HAND_SIZE);
+  const enemyHand=peekRandomCards(HAND_SIZE);
   const enemy=enemyChoose(enemyHand);
   const pEval=evalHand(pick), eEval=enemy.ev;
   const pfx=applyCardEffects(pick,pEval.name,pEval.strength);
@@ -140,16 +169,30 @@ function executeTurn(){
   if(state.enemyHP<=0) return endBattle(true);
   if(state.playerHP<=0) return endBattle(false);
 
-  state.hand = drawCards(HAND_SIZE);
+  idx.forEach(i=>state.hand.splice(i,1));
+  state.deck.push(...pick.map(c=>({...c})));
+  shuffleDeck();
+  refillHandToMax();
   state.selected.clear();
   renderHud(); renderHand();
 }
 
 function endBattle(win){
-  if(!win){ alert("敗北… タイトルへ戻ります"); Object.assign(state,{playerHP:30,gold:10,battle:1,artifacts:[],deck:createBaseDeck(),usedRevive:false}); showScreen("titleScreen"); return; }
+  if(!win){
+    state.titleMessage = "敗北しました。タイトルへ戻ります。";
+    Object.assign(state,{playerHP:30,gold:10,battle:1,artifacts:[],deck:createBaseDeck(),hand:[],usedRevive:false});
+    shuffleDeck();
+    showScreen("titleScreen");
+    return;
+  }
   let reward=state.turnPowerReward; state.artifacts.forEach(a=>{if(a.onReward) reward=a.onReward(reward)});
   state.gold += reward;
-  if(state.battle>=BATTLES_TO_CLEAR){ alert("ゲームクリア！"); showScreen("titleScreen"); return; }
+  if(state.battle>=BATTLES_TO_CLEAR){
+    state.titleMessage = `ゲームクリア！ 報酬通貨 +${reward}`;
+    showScreen("titleScreen");
+    return;
+  }
+  state.titleMessage = `勝利！ 報酬通貨 +${reward}`;
   buildShop(); showUpgrade();
 }
 
@@ -185,12 +228,14 @@ window.buyShop=(idx)=>{
     if(state.deck.length<=20)return alert("これ以上削除不可");
     state.deck.splice(Math.floor(Math.random()*state.deck.length),1);
   } else if(it.type==="buy"){
-    state.deck.push({...drawCards(1)[0],id:crypto.randomUUID(),effect:null});
+    const base = peekRandomCards(1)[0];
+    if(!base) return alert("山札が不足しています");
+    state.deck.push({...base,id:crypto.randomUUID(),effect:null});
   }
   state.gold-=cost; state.shop.splice(idx,1); showUpgrade(); renderHud();
 };
 
-el("startBtn").onclick=()=>{ state.deck=createBaseDeck(); state.playerHP=30; state.gold=10; state.battle=1; state.artifacts=[]; state.usedRevive=false; el("titleScreen").classList.remove("active"); startBattle(); };
+el("startBtn").onclick=()=>{ state.deck=createBaseDeck(); shuffleDeck(); state.hand=[]; state.playerHP=30; state.gold=10; state.battle=1; state.artifacts=[]; state.usedRevive=false; state.titleMessage=""; startBattle(); };
 el("playTurnBtn").onclick=executeTurn;
 el("rerollBtn").onclick=()=>{ if(state.gold<5)return; state.gold-=5; buildShop(); showUpgrade(); };
 el("nextBattleBtn").onclick=()=>{ state.battle++; startBattle(); };
