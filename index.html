@@ -50,7 +50,7 @@
         position: fixed;
         inset: 80px 80px 180px 80px;
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-rows: 1fr 1fr;
         gap: 18px;
       }
       .played-zone { background: #0006; border: 2px dashed #d7ffd877; padding: 8px; }
@@ -117,6 +117,7 @@
       </div>
       <div class="hand-area" id="handArea"><div id="hand" class="hand"></div></div>
       <div style="position:fixed;left:50%;bottom:175px;transform:translateX(-50%);"><button id="playTurnBtn">5枚で勝負</button></div>
+      <div id="handTable" style="position:fixed;right:10px;top:140px;width:220px;background:#0009;border:2px solid var(--pixel-border);padding:8px;"></div>
     </div>
 
     <div id="upgradeScreen" class="screen centered">

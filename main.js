@@ -63,6 +63,12 @@ function renderHud(){ el("hud").innerHTML = `Battle ${state.battle}/${BATTLES_TO
   el("artifacts").innerHTML = state.artifacts.map(a=>`<div title="${a.text}">・${a.name}</div>`).join("")||"なし";
 }
 
+function renderHandStrengthTable(){
+  const rows = Object.entries(HAND_STRENGTH).sort((a,b)=>b[1]-a[1])
+    .map(([name,v])=>`<div style="display:flex;justify-content:space-between;border-bottom:1px solid #ffffff33;padding:2px 0;"><span>${name}</span><b>${v}</b></div>`).join("");
+  el("handTable").innerHTML = `<h3 style="margin:0 0 6px 0;">役 / 強さ指数</h3>${rows}`;
+}
+
 function handTooltip(card){ return `${card.rank}${card.suit}${card.effect?`<br>効果:${card.effect.text}`:""}`; }
 function renderHand(){
   const hand = el("hand"); hand.innerHTML="";
@@ -184,8 +190,10 @@ window.buyShop=(idx)=>{
   state.gold-=cost; state.shop.splice(idx,1); showUpgrade(); renderHud();
 };
 
-el("startBtn").onclick=()=>{ state.deck=createBaseDeck(); state.playerHP=30; state.gold=10; state.battle=1; state.artifacts=[]; state.usedRevive=false; startBattle(); };
+el("startBtn").onclick=()=>{ state.deck=createBaseDeck(); state.playerHP=30; state.gold=10; state.battle=1; state.artifacts=[]; state.usedRevive=false; el("titleScreen").classList.remove("active"); startBattle(); };
 el("playTurnBtn").onclick=executeTurn;
 el("rerollBtn").onclick=()=>{ if(state.gold<5)return; state.gold-=5; buildShop(); showUpgrade(); };
 el("nextBattleBtn").onclick=()=>{ state.battle++; startBattle(); };
 el("handArea").onmousemove=()=>renderHand();
+
+renderHandStrengthTable();
