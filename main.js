@@ -1,244 +1,397 @@
-const SUITS = ["♠", "♥", "♦", "♣"];
-const RANKS = [2,3,4,5,6,7,8,9,10,"J","Q","K","A"];
-const RANK_VALUE = Object.fromEntries(RANKS.map((r,i)=>[String(r), i+2]));
-const HAND_SIZE = 10;
-const BATTLES_TO_CLEAR = 4;
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+ctx.imageSmoothingEnabled = false;
 
-const HAND_STRENGTH = {
-  "ハイカード":1,"ワンペア":2,"ツーペア":3,"スリーカード":4,"ストレート":5,
-  "フラッシュ":6,"フルハウス":7,"フォーカード":8,"ストレートフラッシュ":9,"ロイヤルフラッシュ":12
-};
+const WIDTH = canvas.width;
+const HEIGHT = canvas.height;
+const UI_WIDTH = 168;
+const FIELD = { x: 0, y: 0, w: WIDTH - UI_WIDTH, h: HEIGHT };
 
-const EFFECT_POOL = [
-  {id:"lifesteal", name:"吸収", text:"このカードを役に含むと与ダメの半分回復", apply:(ctx)=>ctx.lifeSteal=true, cost:9},
-  {id:"power", name:"役指数+1", text:"このカードを役に含むと強さ指数+1", apply:(ctx)=>ctx.handBonus+=1, cost:8},
-  {id:"damage", name:"与ダメ+2", text:"このカードを役に含むと与ダメ+2", apply:(ctx)=>ctx.damageBonus+=2, cost:7},
-  {id:"pairBoost", name:"ワンペア特効", text:"ワンペア時に与ダメ+3", apply:(ctx)=>{if(ctx.handName==="ワンペア")ctx.damageBonus+=3;}, cost:6},
-  {id:"dualSuit", name:"二重スート", text:"♠と♥を同時に満たす特殊スート", apply:()=>{}, cost:10},
+const keys = new Set();
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+const rand = (min, max) => min + Math.random() * (max - min);
+const distSq = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+
+const STAGES = [
+  {
+    name: "STAGE 1 / ORBIT CORE",
+    boss: { name: "ORBIT CORE", hp: 420, color: "#ff5c7a" },
+    patternSets: [["radial", "aimed"], ["expandingSpiral", "aimed"]],
+    background: ["#061021", "#10285a"],
+  },
+  {
+    name: "STAGE 2 / SPIRAL WITCH",
+    boss: { name: "SPIRAL WITCH", hp: 620, color: "#c77dff" },
+    patternSets: [["spiral", "wall"], ["rotatingRing", "aimed"], ["expandingSpiral", "wall", "aimed"]],
+    background: ["#110722", "#35165e"],
+  },
+  {
+    name: "STAGE 3 / SUN FORGE",
+    boss: { name: "SUN FORGE", hp: 860, color: "#ffd166" },
+    patternSets: [["radial", "spiral", "aimed"], ["flower", "wall", "rotatingRing"], ["expandingSpiral", "spiral", "wall"]],
+    background: ["#1d0f08", "#653416"],
+  },
 ];
 
-const ARTIFACT_POOL = [
-  {id:"gold12",name:"金貨の紋章",text:"獲得通貨1.2倍",cost:14, onReward:(g)=>Math.ceil(g*1.2)},
-  {id:"pairAura",name:"ペアの護符",text:"ワンペア強さ指数+1",cost:12, onStrength:(n,s)=> n==="ワンペア"?s+1:s},
-  {id:"discount",name:"商人の帳簿",text:"ショップ価格10%割引",cost:11, onCost:(c)=>Math.max(1, Math.floor(c*0.9))},
-  {id:"lastStand",name:"不屈のサイコロ",text:"HP0時、5-6でHP1復活",cost:15, onFatal:(state)=>Math.random()<0.333?1:0},
-];
+class Input {
+  constructor() {
+    addEventListener("keydown", (event) => {
+      keys.add(event.key.toLowerCase());
+      if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(event.key.toLowerCase())) {
+        event.preventDefault();
+      }
+    });
+    addEventListener("keyup", (event) => keys.delete(event.key.toLowerCase()));
+  }
 
-const state = {
-  screen:"title", playerHP:30, enemyHP:20, gold:10, battle:1,
-  deck:[], artifacts:[], selected:new Set(), shop:[], usedRevive:false, turnPowerReward:0, titleMessage:"", hand:[],
+  axis() {
+    const left = keys.has("arrowleft") || keys.has("a");
+    const right = keys.has("arrowright") || keys.has("d");
+    const up = keys.has("arrowup") || keys.has("w");
+    const down = keys.has("arrowdown") || keys.has("s");
+    const x = Number(right) - Number(left);
+    const y = Number(down) - Number(up);
+    const len = Math.hypot(x, y) || 1;
+    return { x: x / len, y: y / len };
+  }
+}
+
+class Entity {
+  constructor(x, y, radius, color) {
+    this.x = x;
+    this.y = y;
+    this.radius = radius;
+    this.color = color;
+    this.dead = false;
+  }
+
+  isOutside(margin = 80) {
+    return this.x < -margin || this.x > FIELD.w + margin || this.y < -margin || this.y > HEIGHT + margin;
+  }
+}
+
+class Player extends Entity {
+  constructor() {
+    super(FIELD.w / 2, HEIGHT - 78, 7, "#7dff9b");
+    this.hp = 5;
+    this.maxHp = 5;
+    this.speed = 270;
+    this.fireCooldown = 0;
+    this.invincible = 0;
+  }
+
+  update(dt, input, bullets) {
+    const axis = input.axis();
+    this.x = clamp(this.x + axis.x * this.speed * dt, 18, FIELD.w - 18);
+    this.y = clamp(this.y + axis.y * this.speed * dt, 18, HEIGHT - 18);
+    this.fireCooldown -= dt;
+    this.invincible = Math.max(0, this.invincible - dt);
+
+    if (this.fireCooldown <= 0) {
+      bullets.push(new Bullet(this.x - 5, this.y - 14, 0, -620, 4, "#b9fffc", "player"));
+      bullets.push(new Bullet(this.x + 5, this.y - 14, 0, -620, 4, "#b9fffc", "player"));
+      this.fireCooldown = 0.09;
+    }
+  }
+
+  hit() {
+    if (this.invincible > 0) return;
+    this.hp -= 1;
+    this.invincible = 1.25;
+  }
+
+  draw(ctx) {
+    const blink = this.invincible > 0 && Math.floor(this.invincible * 18) % 2 === 0;
+    if (blink) return;
+    pixelRect(ctx, this.x - 4, this.y - 13, 8, 8, "#e8fbff");
+    pixelRect(ctx, this.x - 10, this.y - 4, 20, 10, this.color);
+    pixelRect(ctx, this.x - 4, this.y + 5, 8, 8, "#2ed573");
+    pixelRect(ctx, this.x - 2, this.y - 2, 4, 4, "#061021");
+  }
+}
+
+class Boss extends Entity {
+  constructor(config) {
+    super(FIELD.w / 2, 104, 28, config.color);
+    this.name = config.name;
+    this.maxHp = config.hp;
+    this.hp = config.hp;
+    this.time = 0;
+    this.phaseTime = 0;
+    this.patternSetIndex = 0;
+    this.patternTimers = new Map();
+  }
+
+  update(dt, stage, player, enemyBullets) {
+    this.time += dt;
+    this.phaseTime += dt;
+    this.x = FIELD.w / 2;
+    this.y = 104;
+
+    if (this.phaseTime > 5.2) {
+      this.phaseTime = 0;
+      this.patternSetIndex = (this.patternSetIndex + 1) % stage.patternSets.length;
+    }
+
+    for (const patternName of stage.patternSets[this.patternSetIndex]) {
+      BulletPatterns[patternName](this, player, enemyBullets, dt, patternName);
+    }
+  }
+
+  draw(ctx) {
+    pixelRect(ctx, this.x - 30, this.y - 22, 60, 44, this.color);
+    pixelRect(ctx, this.x - 20, this.y - 32, 40, 14, "#f8f0ff");
+    pixelRect(ctx, this.x - 16, this.y - 7, 10, 10, "#061021");
+    pixelRect(ctx, this.x + 6, this.y - 7, 10, 10, "#061021");
+    pixelRect(ctx, this.x - 38, this.y + 6, 12, 22, this.color);
+    pixelRect(ctx, this.x + 26, this.y + 6, 12, 22, this.color);
+  }
+}
+
+class Bullet extends Entity {
+  constructor(x, y, vx, vy, radius, color, owner) {
+    super(x, y, radius, color);
+    this.vx = vx;
+    this.vy = vy;
+    this.owner = owner;
+  }
+
+  update(dt) {
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.dead = this.isOutside();
+  }
+
+  draw(ctx) {
+    pixelRect(ctx, this.x - this.radius, this.y - this.radius, this.radius * 2, this.radius * 2, this.color);
+  }
+}
+
+const BulletPatterns = {
+  radial: timedPattern(0.72, (boss, player, bullets) => {
+    for (let i = 0; i < 18; i++) fireAngle(bullets, boss, (Math.PI * 2 * i) / 18 + boss.time * 0.18, 130, "#ff7a90");
+  }),
+  aimed: timedPattern(0.38, (boss, player, bullets) => {
+    const base = Math.atan2(player.y - boss.y, player.x - boss.x);
+    [-0.24, 0, 0.24].forEach((offset) => fireAngle(bullets, boss, base + offset, 210, "#ffde7a"));
+  }),
+  spiral: timedPattern(0.09, (boss, player, bullets) => {
+    fireAngle(bullets, boss, boss.time * 5.2, 165, "#c77dff");
+    fireAngle(bullets, boss, boss.time * 5.2 + Math.PI, 165, "#c77dff");
+  }),
+  wall: timedPattern(0.95, (boss, player, bullets) => {
+    const gap = rand(90, FIELD.w - 90);
+    for (let x = 30; x < FIELD.w - 10; x += 36) {
+      if (Math.abs(x - gap) > 58) bullets.push(new Bullet(x, -10, 0, 175, 6, "#79f2ff", "enemy"));
+    }
+  }),
+  flower: timedPattern(0.18, (boss, player, bullets) => {
+    for (let i = 0; i < 6; i++) {
+      const angle = boss.time * 2.4 + (Math.PI * 2 * i) / 6 + Math.sin(boss.time * 3) * 0.4;
+      fireAngle(bullets, boss, angle, 150, "#ff9f43");
+    }
+  }),
+  expandingSpiral: timedPattern(0.16, (boss, player, bullets) => {
+    const spin = boss.time * 3.8;
+    for (let i = 0; i < 4; i++) {
+      const angle = spin + (Math.PI * 2 * i) / 4;
+      const speed = 100 + i * 32 + Math.sin(boss.time * 4 + i) * 12;
+      fireAngle(bullets, boss, angle, speed, "#ff6bd6");
+    }
+  }),
+  rotatingRing: timedPattern(1.15, (boss, player, bullets) => {
+    const base = boss.time * 1.35;
+    for (let i = 0; i < 28; i++) {
+      const angle = base + (Math.PI * 2 * i) / 28;
+      const speed = 120 + (i % 2) * 42;
+      fireAngle(bullets, boss, angle, speed, i % 2 ? "#ffe66d" : "#ff8f5c");
+    }
+  }),
 };
 
-const el = id=>document.getElementById(id);
-const screens = ["titleScreen","battleScreen","upgradeScreen"];
-const showScreen = id => {
-  screens.forEach(s=>el(s).classList.toggle("active", s===id));
-  el("startBtn").style.display = id === "titleScreen" ? "inline-block" : "none";
-  el("titleMessage").textContent = id === "titleScreen" ? (state.titleMessage || "") : "";
-};
-
-function createBaseDeck(){ const d=[]; for(const s of SUITS)for(const r of RANKS)d.push({id:crypto.randomUUID(),suit:s,rank:String(r),effect:null}); return d; }
-function drawCards(n){
-  const take = Math.min(n, state.deck.length);
-  return state.deck.splice(0, take).map(x=>({...x}));
+function timedPattern(interval, shoot) {
+  return (boss, player, bullets, dt, key) => {
+    const elapsed = (boss.patternTimers.get(key) ?? interval) + dt;
+    if (elapsed < interval) {
+      boss.patternTimers.set(key, elapsed);
+      return;
+    }
+    boss.patternTimers.set(key, 0);
+    shoot(boss, player, bullets);
+  };
 }
 
-function peekRandomCards(n){
-  const pool = [...state.deck];
-  for(let i=pool.length-1;i>0;i--){
-    const j = Math.floor(Math.random()*(i+1));
-    [pool[i],pool[j]] = [pool[j],pool[i]];
+function fireAngle(bullets, boss, angle, speed, color) {
+  bullets.push(new Bullet(boss.x, boss.y, Math.cos(angle) * speed, Math.sin(angle) * speed, 5, color, "enemy"));
+}
+
+class Game {
+  constructor() {
+    this.input = new Input();
+    this.state = "title";
+    this.stageIndex = 0;
+    this.player = new Player();
+    this.boss = null;
+    this.playerBullets = [];
+    this.enemyBullets = [];
+    this.stars = Array.from({ length: 120 }, () => ({ x: rand(0, FIELD.w), y: rand(0, HEIGHT), speed: rand(12, 55) }));
   }
-  return pool.slice(0, Math.min(n, pool.length)).map(x=>({...x}));
-}
 
+  start() {
+    this.stageIndex = 0;
+    this.player = new Player();
+    this.loadStage();
+    this.state = "playing";
+  }
 
-function shuffleDeck(){
-  for(let i=state.deck.length-1;i>0;i--){
-    const j = Math.floor(Math.random()*(i+1));
-    [state.deck[i],state.deck[j]] = [state.deck[j],state.deck[i]];
+  loadStage() {
+    this.playerBullets = [];
+    this.enemyBullets = [];
+    this.boss = new Boss(STAGES[this.stageIndex].boss);
+    this.player.x = FIELD.w / 2;
+    this.player.y = HEIGHT - 78;
+    this.player.invincible = 1.5;
+  }
+
+  update(dt) {
+    if (this.state !== "playing") return;
+    const stage = STAGES[this.stageIndex];
+    this.stars.forEach((star) => {
+      star.y += star.speed * dt;
+      if (star.y > HEIGHT) Object.assign(star, { x: rand(0, FIELD.w), y: -4 });
+    });
+    this.player.update(dt, this.input, this.playerBullets);
+    this.boss.update(dt, stage, this.player, this.enemyBullets);
+    [...this.playerBullets, ...this.enemyBullets].forEach((bullet) => bullet.update(dt));
+    this.handleCollisions();
+    this.playerBullets = this.playerBullets.filter((bullet) => !bullet.dead);
+    this.enemyBullets = this.enemyBullets.filter((bullet) => !bullet.dead);
+
+    if (this.boss.hp <= 0) this.nextStage();
+    if (this.player.hp <= 0) this.finish(false);
+  }
+
+  handleCollisions() {
+    for (const bullet of this.playerBullets) {
+      if (!bullet.dead && distSq(bullet, this.boss) < (bullet.radius + this.boss.radius) ** 2) {
+        bullet.dead = true;
+        this.boss.hp -= 1;
+      }
+    }
+    for (const bullet of this.enemyBullets) {
+      if (!bullet.dead && distSq(bullet, this.player) < (bullet.radius + this.player.radius) ** 2) {
+        bullet.dead = true;
+        this.player.hit();
+      }
+    }
+  }
+
+  nextStage() {
+    if (this.stageIndex >= STAGES.length - 1) return this.finish(true);
+    this.stageIndex += 1;
+    this.player.hp = Math.min(this.player.maxHp, this.player.hp + 1);
+    this.loadStage();
+  }
+
+  finish(win) {
+    this.state = win ? "clear" : "gameover";
+    showResult(win, this.stageIndex + 1);
+  }
+
+  draw(ctx) {
+    drawBackground(ctx, STAGES[this.stageIndex] ?? STAGES[0], this.stars);
+    if (this.boss) this.boss.draw(ctx);
+    this.playerBullets.forEach((bullet) => bullet.draw(ctx));
+    this.enemyBullets.forEach((bullet) => bullet.draw(ctx));
+    this.player.draw(ctx);
+    if (this.boss) drawHud(ctx, this);
   }
 }
 
-function refillHandToMax(){
-  const need = Math.max(0, HAND_SIZE - state.hand.length);
-  if(need>0) state.hand.push(...drawCards(need));
+function pixelRect(ctx, x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
 }
 
-function countBy(arr,key){ return arr.reduce((a,c)=>(a[c[key]]=(a[c[key]]||0)+1,a),{}); }
-function isStraight(vals){ const s=[...new Set(vals)].sort((a,b)=>a-b); if(s.length!==5)return false; return s[4]-s[0]===4 || JSON.stringify(s)==='[2,3,4,5,14]'; }
-function evalHand(cards){
-  const vals=cards.map(c=>RANK_VALUE[c.rank]);
-  const suits=cards.map(c=>c.suit);
-  const freq=Object.values(countBy(cards,"rank")).sort((a,b)=>b-a);
-  const flush = suits.every(s=>s===suits[0]) || cards.some(c=>c.effect?.id==="dualSuit");
-  const straight=isStraight(vals);
-  let name="ハイカード";
-  if(straight && flush && Math.min(...vals)===10) name="ロイヤルフラッシュ";
-  else if(straight&&flush) name="ストレートフラッシュ";
-  else if(freq[0]===4) name="フォーカード";
-  else if(freq[0]===3&&freq[1]===2) name="フルハウス";
-  else if(flush) name="フラッシュ";
-  else if(straight) name="ストレート";
-  else if(freq[0]===3) name="スリーカード";
-  else if(freq[0]===2&&freq[1]===2) name="ツーペア";
-  else if(freq[0]===2) name="ワンペア";
-  let strength = HAND_STRENGTH[name];
-  for(const a of state.artifacts) if(a.onStrength) strength = a.onStrength(name,strength);
-  return {name, strength};
-}
-
-function renderHud(){ el("hud").innerHTML = `Battle ${state.battle}/${BATTLES_TO_CLEAR}<br>敵HP:${state.enemyHP}<br>自HP:${state.playerHP}<br>通貨:${state.gold}`;
-  el("artifacts").innerHTML = state.artifacts.map(a=>`<div title="${a.text}">・${a.name}</div>`).join("")||"なし";
-}
-
-function renderHandStrengthTable(){
-  const rows = Object.entries(HAND_STRENGTH).sort((a,b)=>b[1]-a[1])
-    .map(([name,v])=>`<div style="display:flex;justify-content:space-between;border-bottom:1px solid #ffffff33;padding:2px 0;"><span>${name}</span><b>${v}</b></div>`).join("");
-  el("handTable").innerHTML = `<h3 style="margin:0 0 6px 0;">役 / 強さ指数</h3>${rows}`;
-}
-
-function handTooltip(card){ return `${card.rank}${card.suit}${card.effect?`<br>効果:${card.effect.text}`:""}`; }
-function renderHand(){
-  const hand = el("hand"); hand.innerHTML="";
-  const cards = state.hand;
-  const spread = el("handArea").matches(":hover") ? 70 : 42;
-  cards.forEach((c,i)=>{
-    const d=document.createElement("div"); d.className="card"+(state.selected.has(i)?" selected":"")+(c.effect?" enchanted":"");
-    const x = (cards.length-1)/2; const off=(i-x)*spread; const rot=(i-x)*4;
-    d.style.left=`calc(50% + ${off}px - 45px)`; d.style.bottom=`${35-Math.abs(i-x)*2}px`; d.style.transform=`rotate(${rot}deg)`;
-    d.innerHTML=`<div>${c.rank}${c.suit}</div><div class='small'>${c.effect?c.effect.name:""}</div>`;
-    d.onmouseenter=(e)=>{const t=el("tooltip");t.style.display="block";t.innerHTML=handTooltip(c);};
-    d.onmousemove=(e)=>{const t=el("tooltip");t.style.left=e.clientX+12+"px";t.style.top=e.clientY+12+"px";};
-    d.onmouseleave=()=>el("tooltip").style.display="none";
-    d.onclick=()=>{ if(state.selected.has(i))state.selected.delete(i); else if(state.selected.size<5)state.selected.add(i); renderHand(); };
-    hand.appendChild(d);
-  });
-}
-
-function startBattle(){
-  state.enemyHP = 16 + state.battle*6;
-  state.turnPowerReward = 0;
-  if(state.hand.length===0) refillHandToMax();
-  state.selected.clear();
-  renderHud(); renderHand();
-  el("enemyPlayed").innerHTML="";el("playerPlayed").innerHTML="";el("enemyInfo").textContent="";el("playerInfo").textContent="";
-  showScreen("battleScreen");
-}
-
-function applyCardEffects(cards, handName, base){
-  const ctx={handName, handBonus:0, damageBonus:0, lifeSteal:false};
-  cards.forEach(c=>c.effect?.apply(ctx));
-  return {strength:base+ctx.handBonus, dmg:base+ctx.handBonus+ctx.damageBonus, ls:ctx.lifeSteal};
-}
-function enemyChoose(hand){
-  let best=null;
-  for(let t=0;t<30;t++){
-    const pick=[...hand].sort(()=>Math.random()-0.5).slice(0,5);
-    const ev=evalHand(pick);
-    if(!best||ev.strength>best.ev.strength)best={pick,ev};
+function drawBackground(ctx, stage, stars) {
+  const gradient = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+  gradient.addColorStop(0, stage.background[0]);
+  gradient.addColorStop(1, stage.background[1]);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, FIELD.w, HEIGHT);
+  stars.forEach((star) => pixelRect(ctx, star.x, star.y, 3, 3, "#d9f7ff"));
+  ctx.strokeStyle = "#24456f";
+  ctx.lineWidth = 2;
+  for (let x = 0; x < FIELD.w; x += 48) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x - 80, HEIGHT);
+    ctx.stroke();
   }
-  return best;
 }
 
-function executeTurn(){
-  if(state.selected.size!==5) return alert("5枚選択してください");
-  const idx=[...state.selected].sort((a,b)=>b-a);
-  const pick=idx.map(i=>state.hand[i]);
-  const enemyHand=peekRandomCards(HAND_SIZE);
-  const enemy=enemyChoose(enemyHand);
-  const pEval=evalHand(pick), eEval=enemy.ev;
-  const pfx=applyCardEffects(pick,pEval.name,pEval.strength);
-  const efx=applyCardEffects(enemy.pick,eEval.name,eEval.strength);
-  let pDmg=0,eDmg=0;
-  if(pfx.strength>efx.strength) pDmg=pfx.dmg;
-  else if(efx.strength>pfx.strength) eDmg=efx.dmg;
-  state.enemyHP-=pDmg; state.playerHP-=eDmg;
-  if(pfx.ls&&pDmg>0) state.playerHP += Math.floor(pDmg/2);
-  state.turnPowerReward += pfx.strength;
-
-  el("playerPlayed").innerHTML=pick.map(c=>`<div>${c.rank}${c.suit}</div>`).join("");
-  el("enemyPlayed").innerHTML=enemy.pick.map(c=>`<div>${c.rank}${c.suit}</div>`).join("");
-  el("playerInfo").textContent=`${pEval.name}(${pfx.strength}) dmg:${pDmg}`;
-  el("enemyInfo").textContent=`${eEval.name}(${efx.strength}) dmg:${eDmg}`;
-
-  if(state.playerHP<=0){
-    const art=state.artifacts.find(a=>a.id==="lastStand");
-    if(art && !state.usedRevive){ state.usedRevive=true; const hp=art.onFatal(state); if(hp>0) state.playerHP=hp; }
+function drawHud(ctx, game) {
+  const stage = STAGES[game.stageIndex];
+  pixelRect(ctx, FIELD.w, 0, UI_WIDTH, HEIGHT, "#081226");
+  pixelRect(ctx, FIELD.w + 8, 8, UI_WIDTH - 16, HEIGHT - 16, "#101a33");
+  drawText(ctx, stage.name, FIELD.w + 18, 36, 16, "#ffe66d");
+  drawText(ctx, stage.boss.name, FIELD.w + 18, 82, 16, "#e8fbff");
+  drawText(ctx, "BOSS HP", FIELD.w + 18, 126, 14, "#ff9fb0");
+  drawVerticalBar(ctx, FIELD.w + 54, 154, 56, 360, game.boss.hp / game.boss.maxHp, "#ff5c7a");
+  drawText(ctx, `${Math.max(0, Math.ceil(game.boss.hp))}/${game.boss.maxHp}`, FIELD.w + 28, 540, 14, "#e8fbff");
+  drawText(ctx, "PLAYER", FIELD.w + 18, 590, 14, "#7dff9b");
+  for (let i = 0; i < game.player.maxHp; i++) {
+    pixelRect(ctx, FIELD.w + 22 + i * 25, 612, 18, 18, i < game.player.hp ? "#7dff9b" : "#283a57");
   }
-  if(state.enemyHP<=0) return endBattle(true);
-  if(state.playerHP<=0) return endBattle(false);
-
-  idx.forEach(i=>state.hand.splice(i,1));
-  state.deck.push(...pick.map(c=>({...c})));
-  shuffleDeck();
-  refillHandToMax();
-  state.selected.clear();
-  renderHud(); renderHand();
+  drawText(ctx, "MOVE", FIELD.w + 18, 664, 13, "#79f2ff");
+  drawText(ctx, "ARROWS / WASD", FIELD.w + 18, 686, 13, "#79f2ff");
 }
 
-function endBattle(win){
-  if(!win){
-    state.titleMessage = "敗北しました。タイトルへ戻ります。";
-    Object.assign(state,{playerHP:30,gold:10,battle:1,artifacts:[],deck:createBaseDeck(),hand:[],usedRevive:false});
-    shuffleDeck();
-    showScreen("titleScreen");
-    return;
-  }
-  let reward=state.turnPowerReward; state.artifacts.forEach(a=>{if(a.onReward) reward=a.onReward(reward)});
-  state.gold += reward;
-  if(state.battle>=BATTLES_TO_CLEAR){
-    state.titleMessage = `ゲームクリア！ 報酬通貨 +${reward}`;
-    showScreen("titleScreen");
-    return;
-  }
-  state.titleMessage = `勝利！ 報酬通貨 +${reward}`;
-  buildShop(); showUpgrade();
+function drawVerticalBar(ctx, x, y, w, h, ratio, color) {
+  pixelRect(ctx, x - 4, y - 4, w + 8, h + 8, "#050817");
+  pixelRect(ctx, x, y, w, h, "#253858");
+  const fill = clamp(ratio, 0, 1) * h;
+  pixelRect(ctx, x, y + h - fill, w, fill, color);
 }
 
-function effectiveCost(cost){ return state.artifacts.reduce((c,a)=>a.onCost?a.onCost(c):c,cost); }
-function buildShop(){
-  const roll=[];
-  for(let i=0;i<3;i++) roll.push({type:"effect", payload:EFFECT_POOL[Math.floor(Math.random()*EFFECT_POOL.length)]});
-  for(let i=0;i<2;i++) roll.push({type:"artifact", payload:ARTIFACT_POOL[Math.floor(Math.random()*ARTIFACT_POOL.length)]});
-  for(let i=0;i<2;i++) roll.push({type:"remove", payload:{name:"カード削除", cost:6}});
-  roll.push({type:"buy", payload:{name:"カード購入", cost:5}});
-  state.shop=roll;
+function drawText(ctx, text, x, y, size, color) {
+  ctx.fillStyle = color;
+  ctx.font = `${size}px 'Courier New', monospace`;
+  ctx.textBaseline = "top";
+  ctx.fillText(text, x, y);
 }
-function showUpgrade(){
-  showScreen("upgradeScreen");
-  el("upgradeHud").textContent=`通貨:${state.gold} / デッキ枚数:${state.deck.length}`;
-  el("shopGrid").innerHTML=state.shop.map((it,idx)=>{
-    const base=it.payload.cost||8, cost=effectiveCost(base);
-    const desc= it.type==="effect"?`カードに付与: ${it.payload.text}`: it.type==="artifact"?it.payload.text:it.payload.name;
-    return `<div class='shop-item'><b>${it.payload.name}</b><p>${desc}</p><p>Cost:${cost}</p><button onclick='window.buyShop(${idx})'>購入</button></div>`;
-  }).join("");
+
+const game = new Game();
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.033, (now - last) / 1000);
+  last = now;
+  game.update(dt);
+  game.draw(ctx);
+  requestAnimationFrame(loop);
 }
-window.buyShop=(idx)=>{
-  const it=state.shop[idx]; if(!it)return;
-  const cost=effectiveCost(it.payload.cost||8); if(state.gold<cost)return alert("通貨不足");
-  if(it.type==="artifact"){
-    if(state.artifacts.some(a=>a.id===it.payload.id))return alert("所持済み");
-    state.artifacts.push(it.payload);
-  } else if(it.type==="effect"){
-    const candidates=state.deck.filter(c=>!c.effect);
-    if(!candidates.length)return alert("付与可能カードなし");
-    candidates[Math.floor(Math.random()*candidates.length)].effect=it.payload;
-  } else if(it.type==="remove"){
-    if(state.deck.length<=20)return alert("これ以上削除不可");
-    state.deck.splice(Math.floor(Math.random()*state.deck.length),1);
-  } else if(it.type==="buy"){
-    const base = peekRandomCards(1)[0];
-    if(!base) return alert("山札が不足しています");
-    state.deck.push({...base,id:crypto.randomUUID(),effect:null});
-  }
-  state.gold-=cost; state.shop.splice(idx,1); showUpgrade(); renderHud();
-};
 
-el("startBtn").onclick=()=>{ state.deck=createBaseDeck(); shuffleDeck(); state.hand=[]; state.playerHP=30; state.gold=10; state.battle=1; state.artifacts=[]; state.usedRevive=false; state.titleMessage=""; startBattle(); };
-el("playTurnBtn").onclick=executeTurn;
-el("rerollBtn").onclick=()=>{ if(state.gold<5)return; state.gold-=5; buildShop(); showUpgrade(); };
-el("nextBattleBtn").onclick=()=>{ state.battle++; startBattle(); };
-el("handArea").onmousemove=()=>renderHand();
+function hideOverlays() {
+  document.getElementById("titleOverlay").classList.add("hidden");
+  document.getElementById("resultOverlay").classList.add("hidden");
+}
 
-renderHandStrengthTable();
+function showResult(win, reachedStage) {
+  const overlay = document.getElementById("resultOverlay");
+  document.getElementById("resultTitle").textContent = win ? "ALL STAGES CLEAR!" : "GAME OVER";
+  document.getElementById("resultText").textContent = win
+    ? "全てのボスを撃破しました。次はより少ない被弾で挑戦しましょう。"
+    : `STAGE ${reachedStage} で撃墜されました。弾幕の隙間を見つけて再挑戦！`;
+  overlay.classList.remove("hidden");
+}
+
+document.getElementById("startButton").addEventListener("click", () => {
+  hideOverlays();
+  game.start();
+});
+document.getElementById("restartButton").addEventListener("click", () => {
+  hideOverlays();
+  game.start();
+});
+
+requestAnimationFrame(loop);
