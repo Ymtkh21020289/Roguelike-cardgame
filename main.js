@@ -15,20 +15,20 @@ const distSq = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
 const STAGES = [
   {
     name: "STAGE 1 / ORBIT CORE",
-    boss: { name: "ORBIT CORE", hp: 160, color: "#ff5c7a", speed: 70 },
-    patterns: ["radial", "aimed"],
+    boss: { name: "ORBIT CORE", hp: 420, color: "#ff5c7a" },
+    patternSets: [["radial", "aimed"], ["expandingSpiral", "aimed"]],
     background: ["#061021", "#10285a"],
   },
   {
     name: "STAGE 2 / SPIRAL WITCH",
-    boss: { name: "SPIRAL WITCH", hp: 220, color: "#c77dff", speed: 95 },
-    patterns: ["spiral", "wall", "aimed"],
+    boss: { name: "SPIRAL WITCH", hp: 620, color: "#c77dff" },
+    patternSets: [["spiral", "wall"], ["rotatingRing", "aimed"], ["expandingSpiral", "wall", "aimed"]],
     background: ["#110722", "#35165e"],
   },
   {
     name: "STAGE 3 / SUN FORGE",
-    boss: { name: "SUN FORGE", hp: 300, color: "#ffd166", speed: 115 },
-    patterns: ["radial", "spiral", "flower", "wall"],
+    boss: { name: "SUN FORGE", hp: 860, color: "#ffd166" },
+    patternSets: [["radial", "spiral", "aimed"], ["flower", "wall", "rotatingRing"], ["expandingSpiral", "spiral", "wall"]],
     background: ["#1d0f08", "#653416"],
   },
 ];
@@ -116,23 +116,26 @@ class Boss extends Entity {
     this.name = config.name;
     this.maxHp = config.hp;
     this.hp = config.hp;
-    this.speed = config.speed;
     this.time = 0;
     this.phaseTime = 0;
-    this.patternIndex = 0;
+    this.patternSetIndex = 0;
+    this.patternTimers = new Map();
   }
 
   update(dt, stage, player, enemyBullets) {
     this.time += dt;
     this.phaseTime += dt;
-    this.x = FIELD.w / 2 + Math.sin(this.time * 0.95) * 250 + Math.sin(this.time * 2.2) * 42;
-    this.y = 98 + Math.sin(this.time * 1.35) * 44;
+    this.x = FIELD.w / 2;
+    this.y = 104;
 
-    if (this.phaseTime > 4.2) {
+    if (this.phaseTime > 5.2) {
       this.phaseTime = 0;
-      this.patternIndex = (this.patternIndex + 1) % stage.patterns.length;
+      this.patternSetIndex = (this.patternSetIndex + 1) % stage.patternSets.length;
     }
-    BulletPatterns[stage.patterns[this.patternIndex]](this, player, enemyBullets, dt);
+
+    for (const patternName of stage.patternSets[this.patternSetIndex]) {
+      BulletPatterns[patternName](this, player, enemyBullets, dt, patternName);
+    }
   }
 
   draw(ctx) {
@@ -188,14 +191,32 @@ const BulletPatterns = {
       fireAngle(bullets, boss, angle, 150, "#ff9f43");
     }
   }),
+  expandingSpiral: timedPattern(0.16, (boss, player, bullets) => {
+    const spin = boss.time * 3.8;
+    for (let i = 0; i < 4; i++) {
+      const angle = spin + (Math.PI * 2 * i) / 4;
+      const speed = 100 + i * 32 + Math.sin(boss.time * 4 + i) * 12;
+      fireAngle(bullets, boss, angle, speed, "#ff6bd6");
+    }
+  }),
+  rotatingRing: timedPattern(1.15, (boss, player, bullets) => {
+    const base = boss.time * 1.35;
+    for (let i = 0; i < 28; i++) {
+      const angle = base + (Math.PI * 2 * i) / 28;
+      const speed = 120 + (i % 2) * 42;
+      fireAngle(bullets, boss, angle, speed, i % 2 ? "#ffe66d" : "#ff8f5c");
+    }
+  }),
 };
 
 function timedPattern(interval, shoot) {
-  let elapsed = 0;
-  return (boss, player, bullets, dt) => {
-    elapsed += dt;
-    if (elapsed < interval) return;
-    elapsed = 0;
+  return (boss, player, bullets, dt, key) => {
+    const elapsed = (boss.patternTimers.get(key) ?? interval) + dt;
+    if (elapsed < interval) {
+      boss.patternTimers.set(key, elapsed);
+      return;
+    }
+    boss.patternTimers.set(key, 0);
     shoot(boss, player, bullets);
   };
 }
