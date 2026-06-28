@@ -230,6 +230,7 @@ class Game {
     this.input = new Input();
     this.state = "title";
     this.stageIndex = 0;
+    this.mode = "normal";
     this.player = new Player();
     this.boss = null;
     this.playerBullets = [];
@@ -237,8 +238,9 @@ class Game {
     this.stars = Array.from({ length: 120 }, () => ({ x: rand(0, FIELD.w), y: rand(0, HEIGHT), speed: rand(12, 55) }));
   }
 
-  start() {
-    this.stageIndex = 0;
+  start(stageIndex = 0, mode = "normal") {
+    this.stageIndex = clamp(stageIndex, 0, STAGES.length - 1);
+    this.mode = mode;
     this.player = new Player();
     this.loadStage();
     this.state = "playing";
@@ -287,10 +289,20 @@ class Game {
   }
 
   nextStage() {
+    if (this.mode === "practice") return this.completePracticeStage();
     if (this.stageIndex >= STAGES.length - 1) return this.finish(true);
     this.stageIndex += 1;
     this.player.hp = Math.min(this.player.maxHp, this.player.hp + 1);
     this.loadStage();
+  }
+
+  completePracticeStage() {
+    this.state = "title";
+    this.mode = "normal";
+    this.playerBullets = [];
+    this.enemyBullets = [];
+    this.boss = null;
+    showTitle();
   }
 
   finish(win) {
@@ -376,6 +388,11 @@ function hideOverlays() {
   document.getElementById("resultOverlay").classList.add("hidden");
 }
 
+function showTitle() {
+  document.getElementById("resultOverlay").classList.add("hidden");
+  document.getElementById("titleOverlay").classList.remove("hidden");
+}
+
 function showResult(win, reachedStage) {
   const overlay = document.getElementById("resultOverlay");
   document.getElementById("resultTitle").textContent = win ? "ALL STAGES CLEAR!" : "GAME OVER";
@@ -387,11 +404,24 @@ function showResult(win, reachedStage) {
 
 document.getElementById("startButton").addEventListener("click", () => {
   hideOverlays();
-  game.start();
+  game.start(0, "normal");
+});
+document.getElementById("practiceButton").addEventListener("click", () => {
+  const stageIndex = Number(document.getElementById("practiceStageSelect").value);
+  hideOverlays();
+  game.start(stageIndex, "practice");
 });
 document.getElementById("restartButton").addEventListener("click", () => {
   hideOverlays();
-  game.start();
+  game.start(0, "normal");
+});
+
+const practiceStageSelect = document.getElementById("practiceStageSelect");
+STAGES.forEach((stage, index) => {
+  const option = document.createElement("option");
+  option.value = String(index);
+  option.textContent = `${index + 1}: ${stage.boss.name}`;
+  practiceStageSelect.append(option);
 });
 
 requestAnimationFrame(loop);

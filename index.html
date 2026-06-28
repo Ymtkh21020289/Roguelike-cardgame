@@ -97,6 +97,34 @@
       }
       button:hover { color: #071126; background: var(--accent); }
 
+      .practice-row {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: end;
+        gap: 12px;
+        margin-top: 10px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: #a9d9ff;
+        font-size: 14px;
+        text-align: left;
+      }
+
+      select {
+        min-width: 220px;
+        padding: 11px 14px;
+        color: var(--text);
+        background: #060b1b;
+        border: 3px solid #3a5b83;
+        font: inherit;
+        font-weight: bold;
+        image-rendering: pixelated;
+      }
+
       .kbd {
         display: inline-block;
         min-width: 28px;
@@ -124,6 +152,13 @@
           画面右端の HP バーを削り切ると次のステージへ進みます。
         </p>
         <button id="startButton">ゲーム開始</button>
+        <div class="practice-row">
+          <label>
+            プラクティス開始ステージ
+            <select id="practiceStageSelect" aria-label="プラクティス開始ステージ"></select>
+          </label>
+          <button id="practiceButton">プラクティスモード</button>
+        </div>
       </div>
     </section>
 
