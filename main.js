@@ -31,6 +31,12 @@ const STAGES = [
     patternSets: [["radial", "spiral", "aimed"], ["flower", "wall", "rotatingRing"], ["expandingSpiral", "spiral", "wall"]],
     background: ["#1d0f08", "#653416"],
   },
+  {
+    name: "STAGE 4 / SERPENT NEXUS",
+    boss: { name: "SERPENT NEXUS", hp: 1080, color: "#5cffd1" },
+    patternSets: [["snake", "aimed"], ["snake", "rotatingRing"], ["snake", "wall", "flower"]],
+    background: ["#041814", "#0b5146"],
+  },
 ];
 
 class Input {
@@ -133,7 +139,8 @@ class Boss extends Entity {
       this.patternSetIndex = (this.patternSetIndex + 1) % stage.patternSets.length;
     }
 
-    for (const patternName of stage.patternSets[this.patternSetIndex]) {
+    const activePatterns = limitWallPatternSet(stage.patternSets[this.patternSetIndex]);
+    for (const patternName of activePatterns) {
       BulletPatterns[patternName](this, player, enemyBullets, dt, patternName);
     }
   }
@@ -167,6 +174,23 @@ class Bullet extends Entity {
   }
 }
 
+class WavyBullet extends Bullet {
+  constructor(x, y, vy, radius, color, owner, amplitude, frequency, phase) {
+    super(x, y, 0, vy, radius, color, owner);
+    this.baseX = x;
+    this.amplitude = amplitude;
+    this.frequency = frequency;
+    this.phase = phase;
+  }
+
+  update(dt) {
+    this.phase += this.frequency * dt;
+    this.y += this.vy * dt;
+    this.x = this.baseX + Math.sin(this.phase) * this.amplitude;
+    this.dead = this.isOutside();
+  }
+}
+
 const BulletPatterns = {
   radial: timedPattern(0.72, (boss, player, bullets) => {
     for (let i = 0; i < 18; i++) fireAngle(bullets, boss, (Math.PI * 2 * i) / 18 + boss.time * 0.18, 130, "#ff7a90");
@@ -181,9 +205,16 @@ const BulletPatterns = {
   }),
   wall: timedPattern(0.95, (boss, player, bullets) => {
     const gap = rand(90, FIELD.w - 90);
-    for (let x = 30; x < FIELD.w - 10; x += 36) {
+    for (let x = 30; x < FIELD.w - 10; x += 45) {
       if (Math.abs(x - gap) > 58) bullets.push(new Bullet(x, -10, 0, 175, 6, "#79f2ff", "enemy"));
     }
+  }),
+  snake: timedPattern(0.2, (boss, player, bullets) => {
+    const lanes = [-96, -48, 0, 48, 96];
+    lanes.forEach((offset, index) => {
+      const x = clamp(boss.x + offset + Math.sin(boss.time * 1.8 + index) * 18, 34, FIELD.w - 34);
+      bullets.push(new WavyBullet(x, boss.y + 16, 150, 5, "#5cffd1", "enemy", 34, 5.6, boss.time * 4 + index * 1.2));
+    });
   }),
   flower: timedPattern(0.18, (boss, player, bullets) => {
     for (let i = 0; i < 6; i++) {
@@ -219,6 +250,12 @@ function timedPattern(interval, shoot) {
     boss.patternTimers.set(key, 0);
     shoot(boss, player, bullets);
   };
+}
+
+function limitWallPatternSet(patternSet) {
+  if (!patternSet.includes("wall")) return patternSet;
+  const otherPatterns = patternSet.filter((patternName) => patternName !== "wall").slice(0, 2);
+  return ["wall", ...otherPatterns];
 }
 
 function fireAngle(bullets, boss, angle, speed, color) {
