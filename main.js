@@ -11,6 +11,9 @@ const keys = new Set();
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const rand = (min, max) => min + Math.random() * (max - min);
 const distSq = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+const SLOW_MOVE_RATE = 0.45;
+const SNAKE_BURST_DURATION = 2.2;
+const SNAKE_REST_DURATION = 1.8;
 
 const STAGES = [
   {
@@ -60,6 +63,10 @@ class Input {
     const len = Math.hypot(x, y) || 1;
     return { x: x / len, y: y / len };
   }
+
+  isSlowMove() {
+    return keys.has("x");
+  }
 }
 
 class Entity {
@@ -88,8 +95,9 @@ class Player extends Entity {
 
   update(dt, input, bullets) {
     const axis = input.axis();
-    this.x = clamp(this.x + axis.x * this.speed * dt, 18, FIELD.w - 18);
-    this.y = clamp(this.y + axis.y * this.speed * dt, 18, HEIGHT - 18);
+    const speed = input.isSlowMove() ? this.speed * SLOW_MOVE_RATE : this.speed;
+    this.x = clamp(this.x + axis.x * speed * dt, 18, FIELD.w - 18);
+    this.y = clamp(this.y + axis.y * speed * dt, 18, HEIGHT - 18);
     this.fireCooldown -= dt;
     this.invincible = Math.max(0, this.invincible - dt);
 
@@ -210,6 +218,9 @@ const BulletPatterns = {
     }
   }),
   snake: timedPattern(0.2, (boss, player, bullets) => {
+    const cycle = SNAKE_BURST_DURATION + SNAKE_REST_DURATION;
+    if (boss.time % cycle > SNAKE_BURST_DURATION) return;
+
     const lanes = [-96, -48, 0, 48, 96];
     lanes.forEach((offset, index) => {
       const x = clamp(boss.x + offset + Math.sin(boss.time * 1.8 + index) * 18, 34, FIELD.w - 34);
@@ -394,6 +405,7 @@ function drawHud(ctx, game) {
   }
   drawText(ctx, "MOVE", FIELD.w + 18, 664, 13, "#79f2ff");
   drawText(ctx, "ARROWS / WASD", FIELD.w + 18, 686, 13, "#79f2ff");
+  drawText(ctx, "HOLD X: SLOW", FIELD.w + 18, 704, 13, "#79f2ff");
 }
 
 function drawVerticalBar(ctx, x, y, w, h, ratio, color) {
